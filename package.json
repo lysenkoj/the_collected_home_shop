@@ -1,5 +1,5 @@
 {
-  "name": "node-js-buy",
+  "name": "the_collected_home_shop",
   "version": "1.0.0",
   "description": "An example using js-buy-sdk built with Node.",
   "main": "lib/app.js",
