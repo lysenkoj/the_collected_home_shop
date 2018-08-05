@@ -1,92 +1,225 @@
-import express from 'express';
-import bodyParser from 'body-parser';
-import path from 'path';
-import client from './js-buy-sdk';
+import React, { Component } from 'react';
+import Product from './components/Product';
+import Cart from './components/Cart';
+import CustomerAuthWithMutation from './components/CustomerAuth';
+import PropTypes from 'prop-types';
+import { graphql, compose } from 'react-apollo';
+import gql from 'graphql-tag';
+import {
+  createCheckout,
+  checkoutLineItemsAdd,
+  checkoutLineItemsUpdate,
+  checkoutLineItemsRemove,
+  checkoutCustomerAssociate,
+  addVariantToCart,
+  updateLineItemInCart,
+  removeLineItemInCart,
+  associateCustomerCheckout
+} from './checkout';
 
-const app = express();
-const shopPromise = client.shop.fetchInfo();
-const productsPromise = client.product.fetchAll();
+class App extends Component {
+  constructor() {
+    super();
 
-app.set('view engine', 'pug');
+    this.state = {
+      isCartOpen: false,
+      isCustomerAuthOpen: false,
+      isNewCustomer: false,
+      products: [],
+      checkout: { lineItems: { edges: [] } }
+    };
 
-app.use(express.static(path.join(__dirname, '../../shared')));
+    this.handleCartClose = this.handleCartClose.bind(this);
+    this.handleCartOpen = this.handleCartOpen.bind(this);
+    this.openCustomerAuth = this.openCustomerAuth.bind(this);
+    this.closeCustomerAuth = this.closeCustomerAuth.bind(this);
+    this.addVariantToCart = addVariantToCart.bind(this);
+    this.updateLineItemInCart = updateLineItemInCart.bind(this);
+    this.removeLineItemInCart = removeLineItemInCart.bind(this);
+    this.showAccountVerificationMessage = this.showAccountVerificationMessage.bind(this);
+    this.associateCustomerCheckout = associateCustomerCheckout.bind(this);
+  }
 
-app.use(bodyParser.urlencoded({extended: false}));
-
-app.get('/', (req, res) => {
-  const checkoutId = req.query.checkoutId;
-
-  // Create a checkout if it doesn't exist yet
-  if (!checkoutId) {
-    return client.checkout.create().then((checkout) => {
-      res.redirect(`/?checkoutId=${checkout.id}`);
+  componentWillMount() {
+    this.props.createCheckout({
+      variables: {
+        input: {}
+      }}).then((res) => {
+      this.setState({
+        checkout: res.data.checkoutCreate.checkout
+      });
     });
   }
 
-  // Fetch the checkout
-  const cartPromise = client.checkout.fetch(checkoutId);
+  static propTypes = {
+    data: PropTypes.shape({
+      loading: PropTypes.bool,
+      error: PropTypes.object,
+      shop: PropTypes.object,
+    }).isRequired,
+    createCheckout: PropTypes.func.isRequired,
+    checkoutLineItemsAdd: PropTypes.func.isRequired,
+    checkoutLineItemsUpdate: PropTypes.func.isRequired
+  }
 
-  return Promise.all([productsPromise, cartPromise, shopPromise]).then(([products, cart, shop]) => {
-    res.render('index', {
-      products,
-      cart,
-      shop,
-      isCartOpen: req.query.cart
+  handleCartOpen() {
+    this.setState({
+      isCartOpen: true,
     });
-  });
-});
+  }
 
-app.post('/add_line_item/:id', (req, res) => {
-  const options = req.body;
-  const productId = req.params.id;
-  const checkoutId = options.checkoutId;
-  const quantity = parseInt(options.quantity, 10);
-
-  delete options.quantity;
-  delete options.checkoutId;
-
-  return productsPromise.then((products) => {
-    const targetProduct = products.find((product) => {
-      return product.id === productId;
+  handleCartClose() {
+    this.setState({
+      isCartOpen: false,
     });
+  }
 
-    // Find the corresponding variant
-    const selectedVariant = client.product.helpers.variantForOptions(targetProduct, options);
+  openCustomerAuth(event) {
+    if (event.target.getAttribute('data-customer-type') === "new-customer") {
+      this.setState({
+        isNewCustomer: true,
+        isCustomerAuthOpen: true
+      });
+    } else {
+      this.setState({
+        isNewCustomer: false,
+        isCustomerAuthOpen: true
+      });
+    }
+  }
 
-    // Add the variant to our cart
-    client.checkout.addLineItems(checkoutId, [{variantId: selectedVariant.id, quantity}]).then((checkout) => {
-      res.redirect(`/?cart=true&checkoutId=${checkout.id}`);
-    }).catch((err) => { return err; });
+  showAccountVerificationMessage(){
+    this.setState({ accountVerificationMessage: true });
+    setTimeout(() => {
+     this.setState({
+       accountVerificationMessage: false
+     })
+   }, 5000);
+  }
 
-  });
-});
+  closeCustomerAuth() {
+    this.setState({
+      isCustomerAuthOpen: false,
+    });
+  }
 
-app.post('/remove_line_item/:id', (req, res) => {
-  const checkoutId = req.body.checkoutId;
+  render() {
+    if (this.props.data.loading) {
+      return <p>Loading ...</p>;
+    }
+    if (this.props.data.error) {
+      return <p>{this.props.data.error.message}</p>;
+    }
 
-  return client.checkout.removeLineItems(checkoutId, [req.params.id]).then((checkout) => {
-    res.redirect(`/?cart=true&checkoutId=${checkout.id}`);
-  });
-});
+    return (
+      <div className="App">
+        <div className="Flash__message-wrapper">
+          <p className={`Flash__message ${this.state.accountVerificationMessage ? 'Flash__message--open' : ''}`}>We have sent you an email, please click the link included to verify your email address</p>
+        </div>
+        <CustomerAuthWithMutation
+          closeCustomerAuth={this.closeCustomerAuth}
+          isCustomerAuthOpen={this.state.isCustomerAuthOpen}
+          newCustomer={this.state.isNewCustomer}
+          associateCustomerCheckout={this.associateCustomerCheckout}
+          showAccountVerificationMessage={this.showAccountVerificationMessage}
+        />
+        <header className="App__header">
+          <ul className="App__nav">
+            <li className="button App__customer-actions" onClick={this.openCustomerAuth} data-customer-type="new-customer">Create an Account</li>
+            <li className="login App__customer-actions" onClick={this.openCustomerAuth}>Log in</li>
+          </ul>
+          {!this.state.isCartOpen &&
+            <div className="App__view-cart-wrapper">
+              <button className="App__view-cart" onClick={()=> this.setState({isCartOpen: true})}>Cart</button>
+            </div>
+          }
+          <div className="App__title">
+            <h1>{this.props.data.shop.name}: React Example</h1>
+            <h2>{this.props.data.shop.description}</h2>
+          </div>
+        </header>
+        <div className="Product-wrapper">
+          { this.props.data.shop.products.edges.map(product =>
+            <Product addVariantToCart={this.addVariantToCart} checkout={this.state.checkout} key={product.node.id.toString()} product={product.node} />
+          )}
+        </div>
+        <Cart
+          removeLineItemInCart={this.removeLineItemInCart}
+          updateLineItemInCart={this.updateLineItemInCart}
+          checkout={this.state.checkout}
+          isCartOpen={this.state.isCartOpen}
+          handleCartClose={this.handleCartClose}
+          customerAccessToken={this.state.customerAccessToken}
+        />
+      </div>
+    );
+  }
+}
 
-app.post('/decrement_line_item/:id', (req, res) => {
-  const checkoutId = req.body.checkoutId;
-  const quantity = parseInt(req.body.currentQuantity, 10) - 1;
+const query = gql`
+  query query {
+    shop {
+      name
+      description
+      products(first:20) {
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+        }
+        edges {
+          node {
+            id
+            title
+            options {
+              id
+              name
+              values
+            }
+            variants(first: 250) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+              }
+              edges {
+                node {
+                  id
+                  title
+                  selectedOptions {
+                    name
+                    value
+                  }
+                  image {
+                    src
+                  }
+                  price
+                }
+              }
+            }
+            images(first: 250) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+              }
+              edges {
+                node {
+                  src
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
 
-  return client.checkout.updateLineItems(checkoutId, [{id: req.params.id, quantity}]).then((checkout) => {
-    res.redirect(`/?cart=true&checkoutId=${checkout.id}`);
-  });
-});
+const AppWithDataAndMutation = compose(
+  graphql(query),
+  graphql(createCheckout, {name: "createCheckout"}),
+  graphql(checkoutLineItemsAdd, {name: "checkoutLineItemsAdd"}),
+  graphql(checkoutLineItemsUpdate, {name: "checkoutLineItemsUpdate"}),
+  graphql(checkoutLineItemsRemove, {name: "checkoutLineItemsRemove"}),
+  graphql(checkoutCustomerAssociate, {name: "checkoutCustomerAssociate"})
+)(App);
 
-app.post('/increment_line_item/:id', (req, res) => {
-  const checkoutId = req.body.checkoutId;
-  const quantity = parseInt(req.body.currentQuantity, 10) + 1;
-
-  return client.checkout.updateLineItems(checkoutId, [{id: req.params.id, quantity}]).then((checkout) => {
-    res.redirect(`/?cart=true&checkoutId=${checkout.id}`);
-  });
-});
-
-app.listen(4200, () => {
-  console.log('Example app listening on port 4200!'); // eslint-disable-line no-console
-});
+export default AppWithDataAndMutation;
